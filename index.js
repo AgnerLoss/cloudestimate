@@ -1,15 +1,19 @@
 const express = require("express");
+const fs = require("fs");
+const path = require("path");
 const { PricingClient, GetProductsCommand } = require("@aws-sdk/client-pricing");
 
 const app = express();
 const port = 3000;
+
+app.use(express.json());
 
 const client = new PricingClient({ region: "us-east-1" });
 
 // =============================
 // EC2
 // =============================
-async function getEC2Price(instanceType) {
+async function getEC2Price(instanceType, quantity) {
   const command = new GetProductsCommand({
     ServiceCode: "AmazonEC2",
     Filters: [
@@ -24,18 +28,15 @@ async function getEC2Price(instanceType) {
 
   const response = await client.send(command);
   const products = response.PriceList.map(p => JSON.parse(p));
-
   const product = products.find(
     p => p.product.attributes.regionCode === "sa-east-1"
   );
-
-  if (!product) throw new Error("EC2 não encontrado");
 
   const terms = product.terms.OnDemand;
   const priceDimensions = Object.values(terms)[0].priceDimensions;
   const pricePerHour = Object.values(priceDimensions)[0].pricePerUnit.USD;
 
-  return (parseFloat(pricePerHour) * 730).toFixed(2);
+  return (parseFloat(pricePerHour) * 730 * quantity).toFixed(2);
 }
 
 // =============================
@@ -54,12 +55,9 @@ async function getRDSPrice(instanceType) {
 
   const response = await client.send(command);
   const products = response.PriceList.map(p => JSON.parse(p));
-
   const product = products.find(
     p => p.product.attributes.regionCode === "sa-east-1"
   );
-
-  if (!product) throw new Error("RDS não encontrado");
 
   const terms = product.terms.OnDemand;
   const priceDimensions = Object.values(terms)[0].priceDimensions;
@@ -84,12 +82,9 @@ async function getEFSPrice(storageGB) {
     p => p.product.attributes.regionCode === "sa-east-1"
   );
 
-  const storageProduct = regionProducts.find(p => {
-    const usageType = p.product.attributes.usagetype || "";
-    return usageType.includes("TimedStorage");
-  });
-
-  if (!storageProduct) throw new Error("EFS não encontrado");
+  const storageProduct = regionProducts.find(p =>
+    (p.product.attributes.usagetype || "").includes("TimedStorage")
+  );
 
   const terms = storageProduct.terms.OnDemand;
   const priceDimensions = Object.values(terms)[0].priceDimensions;
@@ -98,65 +93,121 @@ async function getEFSPrice(storageGB) {
   return (parseFloat(pricePerGB) * storageGB).toFixed(2);
 }
 
-// =============================
-// NAT FIXO
-// =============================
 function getNATPrice(quantity) {
-  const natHourlyUSD = 0.065;
-  const monthly = natHourlyUSD * 730 * quantity;
-  return monthly.toFixed(2);
+  return (0.065 * 730 * quantity).toFixed(2);
+}
+
+function getALBPrice(quantity) {
+  return ((0.025 + 0.008) * 730 * quantity).toFixed(2);
 }
 
 // =============================
-// ALB FIXO
+// GERADOR DOCUMENTO TÉCNICO
 // =============================
-function getALBPrice(quantity) {
-  const albHourly = 0.025;
-  const lcuHourly = 0.008;
+function generateProfessionalDocument(arch, breakdown, total) {
+  return `
+# Documento Técnico de Arquitetura
+## WordPress Alta Disponibilidade – Região ${arch.region || "sa-east-1"}
 
-  const monthly = (albHourly + lcuHourly) * 730 * quantity;
-  return monthly.toFixed(2);
+Data de geração: ${new Date().toISOString()}
+
+---
+
+## 1. Objetivo
+Descrever a arquitetura proposta para hospedagem de aplicação WordPress com alta disponibilidade.
+
+---
+
+## 2. Arquitetura de Rede
+- 1 VPC dedicada
+- 2 Subnets públicas
+- 2 Subnets privadas
+- 1 Internet Gateway
+- ${arch.nat.quantity} NAT Gateways
+
+---
+
+## 3. Camada de Aplicação
+- ${arch.ec2.quantity} EC2 (${arch.ec2.instanceType})
+- ALB (${arch.alb.quantity})
+- EFS (${arch.efs.storageGB} GB)
+
+---
+
+## 4. Banco de Dados
+- RDS Multi-AZ (${arch.rds.instanceType})
+
+---
+
+## 5. Estimativa de Custos
+
+| Serviço | USD |
+|----------|------|
+| EC2 | ${breakdown.ec2} |
+| RDS | ${breakdown.rds} |
+| EFS | ${breakdown.efs} |
+| NAT | ${breakdown.nat} |
+| ALB | ${breakdown.alb} |
+| **TOTAL** | **${total}** |
+
+---
+
+Documento gerado automaticamente pelo CloudEstimate.
+`;
+}
+
+// =============================
+// EXPORTAÇÃO
+// =============================
+function saveDocumentToFile(content) {
+  const exportDir = path.join(__dirname, "exports");
+
+  if (!fs.existsSync(exportDir)) {
+    fs.mkdirSync(exportDir);
+  }
+
+  const fileName = `architecture-${Date.now()}.md`;
+  const filePath = path.join(exportDir, fileName);
+
+  fs.writeFileSync(filePath, content);
+
+  return fileName;
 }
 
 // =============================
 // ROTA
 // =============================
-app.get("/architecture", async (req, res) => {
+app.post("/architecture", async (req, res) => {
   try {
-    const ec2Type = req.query.ec2 || "m6i.large";
-    const rdsType = req.query.rds || "db.m6i.large";
-    const efsGB = parseInt(req.query.efs) || 200;
-    const natQty = parseInt(req.query.nat) || 2;
-    const albQty = parseInt(req.query.alb) || 1;
+    const arch = req.body;
 
-    const ec2Single = await getEC2Price(ec2Type);
-    const ec2Monthly = (parseFloat(ec2Single) * 2).toFixed(2);
+    const ec2 = await getEC2Price(arch.ec2.instanceType, arch.ec2.quantity);
+    const rds = await getRDSPrice(arch.rds.instanceType);
+    const efs = await getEFSPrice(arch.efs.storageGB);
+    const nat = getNATPrice(arch.nat.quantity);
+    const alb = getALBPrice(arch.alb.quantity);
 
-    const rdsMonthly = await getRDSPrice(rdsType);
-    const efsMonthly = await getEFSPrice(efsGB);
-    const natMonthly = getNATPrice(natQty);
-    const albMonthly = getALBPrice(albQty);
+    const breakdown = { ec2, rds, efs, nat, alb };
 
     const total = (
-      parseFloat(ec2Monthly) +
-      parseFloat(rdsMonthly) +
-      parseFloat(efsMonthly) +
-      parseFloat(natMonthly) +
-      parseFloat(albMonthly)
+      parseFloat(ec2) +
+      parseFloat(rds) +
+      parseFloat(efs) +
+      parseFloat(nat) +
+      parseFloat(alb)
     ).toFixed(2);
 
+    const document = generateProfessionalDocument(arch, breakdown, total);
+    const fileName = saveDocumentToFile(document);
+
     res.json({
-      region: "sa-east-1",
-      ec2MonthlyUSD: ec2Monthly,
-      rdsMonthlyUSD: rdsMonthly,
-      efsMonthlyUSD: efsMonthly,
-      natMonthlyUSD: natMonthly,
-      albMonthlyUSD: albMonthly,
-      totalMonthlyUSD: total
+      breakdown,
+      totalMonthlyUSD: total,
+      exportedFile: fileName
     });
 
   } catch (error) {
-    console.error("ERRO REAL:", error);
+    console.error(error);
     res.status(500).json({ error: error.message });
   }
 });
