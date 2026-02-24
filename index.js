@@ -99,11 +99,22 @@ async function getEFSPrice(storageGB) {
 }
 
 // =============================
-// NAT FIXO (MVP)
+// NAT FIXO
 // =============================
 function getNATPrice(quantity) {
-  const natHourlyUSD = 0.065; // valor real aproximado sa-east-1
+  const natHourlyUSD = 0.065;
   const monthly = natHourlyUSD * 730 * quantity;
+  return monthly.toFixed(2);
+}
+
+// =============================
+// ALB FIXO
+// =============================
+function getALBPrice(quantity) {
+  const albHourly = 0.025;
+  const lcuHourly = 0.008;
+
+  const monthly = (albHourly + lcuHourly) * 730 * quantity;
   return monthly.toFixed(2);
 }
 
@@ -116,6 +127,7 @@ app.get("/architecture", async (req, res) => {
     const rdsType = req.query.rds || "db.m6i.large";
     const efsGB = parseInt(req.query.efs) || 200;
     const natQty = parseInt(req.query.nat) || 2;
+    const albQty = parseInt(req.query.alb) || 1;
 
     const ec2Single = await getEC2Price(ec2Type);
     const ec2Monthly = (parseFloat(ec2Single) * 2).toFixed(2);
@@ -123,12 +135,14 @@ app.get("/architecture", async (req, res) => {
     const rdsMonthly = await getRDSPrice(rdsType);
     const efsMonthly = await getEFSPrice(efsGB);
     const natMonthly = getNATPrice(natQty);
+    const albMonthly = getALBPrice(albQty);
 
     const total = (
       parseFloat(ec2Monthly) +
       parseFloat(rdsMonthly) +
       parseFloat(efsMonthly) +
-      parseFloat(natMonthly)
+      parseFloat(natMonthly) +
+      parseFloat(albMonthly)
     ).toFixed(2);
 
     res.json({
@@ -137,6 +151,7 @@ app.get("/architecture", async (req, res) => {
       rdsMonthlyUSD: rdsMonthly,
       efsMonthlyUSD: efsMonthly,
       natMonthlyUSD: natMonthly,
+      albMonthlyUSD: albMonthly,
       totalMonthlyUSD: total
     });
 
