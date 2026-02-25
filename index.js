@@ -10,39 +10,47 @@ app.use(express.json());
 
 const client = new PricingClient({ region: "us-east-1" });
 
-// =============================
-// EC2
-// =============================
-async function getEC2Price(instanceType, quantity) {
+/* =============================
+   VALIDAÇÃO
+============================= */
+function validateModel(model) {
+  if (!model.metadata?.region) throw new Error("metadata.region é obrigatório");
+  if (!model.compute?.ec2) throw new Error("compute.ec2 é obrigatório");
+  if (!model.database?.rds) throw new Error("database.rds é obrigatório");
+  if (!model.storage?.efs) throw new Error("storage.efs é obrigatório");
+}
+
+/* =============================
+   AWS PRICING API
+============================= */
+
+async function getEC2Price(region, instanceType, quantity) {
   const command = new GetProductsCommand({
     ServiceCode: "AmazonEC2",
     Filters: [
       { Type: "TERM_MATCH", Field: "instanceType", Value: instanceType },
       { Type: "TERM_MATCH", Field: "operatingSystem", Value: "Linux" },
       { Type: "TERM_MATCH", Field: "tenancy", Value: "Shared" },
-      { Type: "TERM_MATCH", Field: "preInstalledSw", Value: "NA" },
-      { Type: "TERM_MATCH", Field: "capacitystatus", Value: "Used" }
+      { Type: "TERM_MATCH", Field: "preInstalledSw", Value: "NA" }
     ],
     MaxResults: 50
   });
 
   const response = await client.send(command);
   const products = response.PriceList.map(p => JSON.parse(p));
-  const product = products.find(
-    p => p.product.attributes.regionCode === "sa-east-1"
-  );
 
-  const terms = product.terms.OnDemand;
-  const priceDimensions = Object.values(terms)[0].priceDimensions;
-  const pricePerHour = Object.values(priceDimensions)[0].pricePerUnit.USD;
+  const product = products.find(p => p.product.attributes.regionCode === region);
+  if (!product) throw new Error("EC2 não encontrado");
+
+  const pricePerHour =
+    Object.values(
+      Object.values(product.terms.OnDemand)[0].priceDimensions
+    )[0].pricePerUnit.USD;
 
   return (parseFloat(pricePerHour) * 730 * quantity).toFixed(2);
 }
 
-// =============================
-// RDS
-// =============================
-async function getRDSPrice(instanceType) {
+async function getRDSPrice(region, instanceType) {
   const command = new GetProductsCommand({
     ServiceCode: "AmazonRDS",
     Filters: [
@@ -55,21 +63,19 @@ async function getRDSPrice(instanceType) {
 
   const response = await client.send(command);
   const products = response.PriceList.map(p => JSON.parse(p));
-  const product = products.find(
-    p => p.product.attributes.regionCode === "sa-east-1"
-  );
 
-  const terms = product.terms.OnDemand;
-  const priceDimensions = Object.values(terms)[0].priceDimensions;
-  const pricePerHour = Object.values(priceDimensions)[0].pricePerUnit.USD;
+  const product = products.find(p => p.product.attributes.regionCode === region);
+  if (!product) throw new Error("RDS não encontrado");
+
+  const pricePerHour =
+    Object.values(
+      Object.values(product.terms.OnDemand)[0].priceDimensions
+    )[0].pricePerUnit.USD;
 
   return (parseFloat(pricePerHour) * 730).toFixed(2);
 }
 
-// =============================
-// EFS
-// =============================
-async function getEFSPrice(storageGB) {
+async function getEFSPrice(region, storageGB) {
   const command = new GetProductsCommand({
     ServiceCode: "AmazonEFS",
     MaxResults: 100
@@ -78,20 +84,50 @@ async function getEFSPrice(storageGB) {
   const response = await client.send(command);
   const products = response.PriceList.map(p => JSON.parse(p));
 
-  const regionProducts = products.filter(
-    p => p.product.attributes.regionCode === "sa-east-1"
+  const product = products.find(
+    p =>
+      p.product.attributes.regionCode === region &&
+      (p.product.attributes.usagetype || "").includes("TimedStorage")
   );
 
-  const storageProduct = regionProducts.find(p =>
-    (p.product.attributes.usagetype || "").includes("TimedStorage")
-  );
+  if (!product) throw new Error("EFS não encontrado");
 
-  const terms = storageProduct.terms.OnDemand;
-  const priceDimensions = Object.values(terms)[0].priceDimensions;
-  const pricePerGB = Object.values(priceDimensions)[0].pricePerUnit.USD;
+  const pricePerGB =
+    Object.values(
+      Object.values(product.terms.OnDemand)[0].priceDimensions
+    )[0].pricePerUnit.USD;
 
   return (parseFloat(pricePerGB) * storageGB).toFixed(2);
 }
+
+async function getElastiCachePrice(region) {
+  const command = new GetProductsCommand({
+    ServiceCode: "AmazonElastiCache",
+    Filters: [
+      { Type: "TERM_MATCH", Field: "cacheEngine", Value: "Memcached" },
+      { Type: "TERM_MATCH", Field: "instanceType", Value: "cache.t4g.medium" }
+    ],
+    MaxResults: 50
+  });
+
+  const response = await client.send(command);
+  const products = response.PriceList.map(p => JSON.parse(p));
+
+  const product = products.find(p => p.product.attributes.regionCode === region);
+  if (!product) throw new Error("ElastiCache não encontrado");
+
+  const pricePerHour =
+    Object.values(
+      Object.values(product.terms.OnDemand)[0].priceDimensions
+    )[0].pricePerUnit.USD;
+
+  const nodes = 2;
+  return (parseFloat(pricePerHour) * 730 * nodes).toFixed(2);
+}
+
+/* =============================
+   ESTIMATIVAS CONTROLADAS v1
+============================= */
 
 function getNATPrice(quantity) {
   return (0.065 * 730 * quantity).toFixed(2);
@@ -101,104 +137,130 @@ function getALBPrice(quantity) {
   return ((0.025 + 0.008) * 730 * quantity).toFixed(2);
 }
 
-// =============================
-// GERADOR DOCUMENTO TÉCNICO
-// =============================
-function generateProfessionalDocument(arch, breakdown, total) {
+function getCloudFrontPrice() {
+  const dataTransferGB = 3000;
+  const pricePerGB = 0.16;
+
+  const requestsMillions = 4.5;
+  const requestUnits = (requestsMillions * 1000000) / 10000;
+  const requestCost = requestUnits * 0.0075;
+
+  return (dataTransferGB * pricePerGB + requestCost).toFixed(2);
+}
+
+function getS3Price() {
+  const storageGB = 100;
+  const pricePerGB = 0.023;
+  return (storageGB * pricePerGB).toFixed(2);
+}
+
+function getWAFPrice() {
+  return (25 + 5).toFixed(2); // estimativa simples
+}
+
+function getRoute53Price() {
+  const hostedZone = 0.5;
+  const queries = 0.4;
+  return (hostedZone + queries).toFixed(2);
+}
+
+/* =============================
+   DOCUMENTO
+============================= */
+
+function generateDocument(model, breakdown, total) {
   return `
-# Documento Técnico de Arquitetura
-## WordPress Alta Disponibilidade – Região ${arch.region || "sa-east-1"}
+# Documento Técnico - WordPress HA Oficial
 
-Data de geração: ${new Date().toISOString()}
+Projeto: ${model.metadata.projectName}
+Região: ${model.metadata.region}
 
----
+## Arquitetura
+- Route 53
+- CloudFront + WAF
+- S3 (Assets estáticos)
+- ALB + Auto Scaling EC2
+- ElastiCache Memcached
+- RDS Multi-AZ
+- EFS compartilhado
+- ${model.network.natGateways} NAT Gateways
 
-## 1. Objetivo
-Descrever a arquitetura proposta para hospedagem de aplicação WordPress com alta disponibilidade.
+## Custos
 
----
+${Object.entries(breakdown)
+  .map(([k, v]) => `- ${k.toUpperCase()}: USD ${v}`)
+  .join("\n")}
 
-## 2. Arquitetura de Rede
-- 1 VPC dedicada
-- 2 Subnets públicas
-- 2 Subnets privadas
-- 1 Internet Gateway
-- ${arch.nat.quantity} NAT Gateways
-
----
-
-## 3. Camada de Aplicação
-- ${arch.ec2.quantity} EC2 (${arch.ec2.instanceType})
-- ALB (${arch.alb.quantity})
-- EFS (${arch.efs.storageGB} GB)
-
----
-
-## 4. Banco de Dados
-- RDS Multi-AZ (${arch.rds.instanceType})
-
----
-
-## 5. Estimativa de Custos
-
-| Serviço | USD |
-|----------|------|
-| EC2 | ${breakdown.ec2} |
-| RDS | ${breakdown.rds} |
-| EFS | ${breakdown.efs} |
-| NAT | ${breakdown.nat} |
-| ALB | ${breakdown.alb} |
-| **TOTAL** | **${total}** |
-
----
-
-Documento gerado automaticamente pelo CloudEstimate.
+TOTAL MENSAL ESTIMADO: USD ${total}
 `;
 }
 
-// =============================
-// EXPORTAÇÃO
-// =============================
-function saveDocumentToFile(content) {
-  const exportDir = path.join(__dirname, "exports");
+/* =============================
+   EXPORTAÇÃO
+============================= */
 
-  if (!fs.existsSync(exportDir)) {
-    fs.mkdirSync(exportDir);
-  }
+function saveDocument(content) {
+  const dir = path.join(__dirname, "exports");
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir);
 
   const fileName = `architecture-${Date.now()}.md`;
-  const filePath = path.join(exportDir, fileName);
-
-  fs.writeFileSync(filePath, content);
-
+  fs.writeFileSync(path.join(dir, fileName), content);
   return fileName;
 }
 
-// =============================
-// ROTA
-// =============================
+/* =============================
+   ROTA PRINCIPAL
+============================= */
+
 app.post("/architecture", async (req, res) => {
   try {
-    const arch = req.body;
+    const model = req.body;
+    validateModel(model);
 
-    const ec2 = await getEC2Price(arch.ec2.instanceType, arch.ec2.quantity);
-    const rds = await getRDSPrice(arch.rds.instanceType);
-    const efs = await getEFSPrice(arch.efs.storageGB);
-    const nat = getNATPrice(arch.nat.quantity);
-    const alb = getALBPrice(arch.alb.quantity);
+    const region = model.metadata.region;
 
-    const breakdown = { ec2, rds, efs, nat, alb };
+    const ec2Quantity =
+      model.compute.ec2.minInstances ||
+      model.compute.ec2.quantity ||
+      1;
 
-    const total = (
-      parseFloat(ec2) +
-      parseFloat(rds) +
-      parseFloat(efs) +
-      parseFloat(nat) +
-      parseFloat(alb)
-    ).toFixed(2);
+    const ec2 = await getEC2Price(
+      region,
+      model.compute.ec2.instanceType,
+      ec2Quantity
+    );
 
-    const document = generateProfessionalDocument(arch, breakdown, total);
-    const fileName = saveDocumentToFile(document);
+    const rds = await getRDSPrice(region, model.database.rds.instanceType);
+    const efs = await getEFSPrice(region, model.storage.efs.storageGB);
+    const elasticache = await getElastiCachePrice(region);
+
+    const nat = getNATPrice(model.network.natGateways || 2);
+    const alb = getALBPrice(1);
+
+    const cloudfront = model.edge?.cloudfront ? getCloudFrontPrice() : "0.00";
+    const s3 = model.edge?.s3StaticAssets ? getS3Price() : "0.00";
+    const waf = model.edge?.waf ? getWAFPrice() : "0.00";
+    const route53 = model.dns?.route53 ? getRoute53Price() : "0.00";
+
+    const breakdown = {
+      ec2,
+      rds,
+      efs,
+      elasticache,
+      nat,
+      alb,
+      cloudfront,
+      s3,
+      waf,
+      route53
+    };
+
+    const total = Object.values(breakdown)
+      .reduce((sum, value) => sum + parseFloat(value), 0)
+      .toFixed(2);
+
+    const document = generateDocument(model, breakdown, total);
+    const fileName = saveDocument(document);
 
     res.json({
       breakdown,
@@ -207,11 +269,10 @@ app.post("/architecture", async (req, res) => {
     });
 
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: error.message });
+    res.status(400).json({ error: error.message });
   }
 });
 
 app.listen(port, () => {
-  console.log(`CloudEstimate rodando em http://localhost:${port}`);
+  console.log(`CloudEstimate v1 rodando em http://localhost:${port}`);
 });
