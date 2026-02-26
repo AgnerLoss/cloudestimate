@@ -211,6 +211,7 @@ function saveDocument(content) {
 /* =============================
    ROTA PRINCIPAL
 ============================= */
+app.use(express.static("public"));
 
 app.post("/architecture", async (req, res) => {
   try {
