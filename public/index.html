@@ -1,16 +1,149 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>CloudEstimate v1</title>
+  <title>CloudEstimate Builder</title>
+  <style>
+    body { 
+      font-family: Arial; 
+      margin: 0; 
+      display: flex; 
+      flex-direction: column;
+      height: 100vh;
+    }
+
+    header {
+      background: #111;
+      padding: 15px 10px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      position: relative;
+    }
+
+    .version {
+      position: absolute;
+      right: 15px;
+      top: 15px;
+      color: #666;
+      font-size: 12px;
+    }
+
+    header img {
+      height: 55px;
+      margin-bottom: 6px;
+    }
+
+    header p {
+      color: #bbb;
+      margin: 0;
+      font-size: 14px;
+      letter-spacing: 0.5px;
+    }
+
+    .main {
+      display: flex;
+      flex: 1;
+    }
+
+    #sidebar { 
+      width: 250px; 
+      background: #111; 
+      color: white; 
+      padding: 15px; 
+    }
+
+    #canvas { 
+      flex: 1; 
+      background: #f4f4f4; 
+      position: relative; 
+    }
+
+    .node {
+      width: 120px;
+      height: 60px;
+      background: orange;
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: absolute;
+      cursor: pointer;
+      border-radius: 6px;
+      font-weight: bold;
+    }
+
+    #configPanel {
+      width: 300px;
+      background: #222;
+      color: white;
+      padding: 15px;
+    }
+
+    input, select { 
+      width: 100%; 
+      margin-bottom: 10px; 
+      padding: 6px;
+    }
+
+    button { 
+      margin-bottom: 10px; 
+      width: 100%; 
+      padding: 8px;
+      cursor: pointer;
+    }
+
+    footer {
+      background: #111;
+      color: #777;
+      font-size: 12px;
+      text-align: center;
+      padding: 10px;
+    }
+
+    footer span {
+      color: #aaa;
+    }
+
+    hr {
+      border: 1px solid #333;
+    }
+  </style>
 </head>
 <body>
-  <h1>CloudEstimate - WordPress HA</h1>
 
-  <button onclick="generateTemplate()">Gerar WordPress HA Oficial</button>
+<header>
+  <div class="version">v1.0.0</div>
+  <img src="/imagens/2.png.webp" alt="Cloud Treinamentos - UpperStack">
+  <p>Protótipo educacional desenvolvido na Mentoria UpperStack</p>
+</header>
 
-  <h2>Total Mensal:</h2>
-  <div id="result">---</div>
+<div class="main">
 
-  <script src="app.js"></script>
+  <div id="sidebar">
+    <h3>Adicionar</h3>
+    <button onclick="addNode('ec2')">EC2</button>
+    <button onclick="addNode('rds')">RDS</button>
+    <button onclick="addNode('cloudfront')">CloudFront</button>
+    <button onclick="calculate()">Calcular</button>
+    <hr>
+    <h4>Total</h4>
+    <div id="result">---</div>
+  </div>
+
+  <div id="canvas"></div>
+
+  <div id="configPanel">
+    <h3>Configuração</h3>
+    <div id="configContent">Selecione um componente</div>
+  </div>
+
+</div>
+
+<footer>
+  Desenvolvido por <span>Agner Loss Rodrigues</span> |
+  Powered by <span>AWS Pricing API</span>
+</footer>
+
+<script src="app.js"></script>
 </body>
 </html>

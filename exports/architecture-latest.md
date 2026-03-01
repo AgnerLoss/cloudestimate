@@ -1,7 +1,7 @@
 
 # Documento Técnico - WordPress HA Oficial
 
-Projeto: wordpress-ha
+Projeto: builder-project
 Região: sa-east-1
 
 ## Arquitetura
@@ -23,8 +23,8 @@ Região: sa-east-1
 - NAT: USD 94.90
 - ALB: USD 24.09
 - CLOUDFRONT: USD 483.38
-- S3: USD 2.30
-- WAF: USD 30.00
-- ROUTE53: USD 0.90
+- S3: USD 0.00
+- WAF: USD 0.00
+- ROUTE53: USD 0.00
 
-TOTAL MENSAL ESTIMADO: USD 1435.13
+TOTAL MENSAL ESTIMADO: USD 1401.93
